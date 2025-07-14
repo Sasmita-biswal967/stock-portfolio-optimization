@@ -1,0 +1,11 @@
+streamlit==1.46.1
+yfinance==0.2.65
+pandas==2.3.1
+numpy==2.0.2
+matplotlib==3.9.4
+scikit-learn==1.6.1
+xgboost==2.1.4
+pyportfolioopt @ git+https://github.com/robertmartin8/PyPortfolioOpt.git@65cabcee11d91777d63628744c36869ec64a1c85
+seaborn==0.13.2
+ta==0.11.0
+plotly==6.2.0
