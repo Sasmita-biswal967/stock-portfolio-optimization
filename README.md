@@ -1,5 +1,5 @@
 # stock-portfolio-optimization
-A **machine-learning powered stock portfolio optimization application** built using **Streamlit**, **XGBoost**, and **Modern Portfolio Theory**.
+A **Machine Learning powered stock portfolio optimization application** built using **Streamlit**, **XGBoost**, and **Modern Portfolio Theory**.
 
 This project analyzes **10+ years of historical, real-time stock market data**, predicts future returns, and builds an **optimal investment portfolio** using the **Efficient Frontier (Max Sharpe Ratio)** method.
 
@@ -29,8 +29,8 @@ This project analyzes **10+ years of historical, real-time stock market data**, 
 ---
 
 ## 📂 Project Structure
-├── app.py
-├── requirements.txt
+├── app.py  
+├── requirements.txt  
 └── README.md
 
 ---
