@@ -33,7 +33,7 @@ col1, col2 = st.columns(2)
 with col1:
     tickers_input = st.text_input(
         "Stock Tickers (comma separated)",
-        placeholder="TCS.NS, INFY.NS, RELIANCE.NS"
+        placeholder="AAPL, MSFT, META"
     )
 
 with col2:
@@ -50,9 +50,9 @@ if tickers_input and capital:
     tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
     end_date = datetime.today()
-    start_date = end_date - timedelta(days=365 * 15)
+    start_date = end_date - timedelta(days=365 * 10)
 
-    with st.spinner("Downloading 15 years of stock data..."):
+    with st.spinner("Downloading 10 years of stock data..."):
         adj_close_df = pd.DataFrame()
 
         for ticker in tickers:
