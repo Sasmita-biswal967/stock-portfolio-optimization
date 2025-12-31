@@ -38,10 +38,10 @@ with col1:
 
 with col2:
     capital = st.number_input(
-        "Total Capital (₹)",
-        min_value=1000.0,
-        value=100000.0,
-        step=1000.0
+        "Total Capital ($)",
+        min_value=100.0,
+        value=10000.0,
+        step=100.0
     )
 
 # FETCH DATA
@@ -50,9 +50,9 @@ if tickers_input and capital:
     tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
     end_date = datetime.today()
-    start_date = end_date - timedelta(days=365 * 10)
+    start_date = end_date - timedelta(days=365 * 15)
 
-    with st.spinner("Downloading 10 years of stock data..."):
+    with st.spinner("Downloading 15 years of stock data..."):
         adj_close_df = pd.DataFrame()
 
         for ticker in tickers:
@@ -199,9 +199,9 @@ if tickers_input and capital:
     ])
 
     st.dataframe(alloc_df, use_container_width=True)
-    st.write(f"**Remaining Cash:** ₹{leftover:,.2f}")
+    st.write(f"**Remaining amount:** ${leftover:,.2f}")
 
-    # ================= VISUALIZATION =================
+    # VISUALIZATION
     st.subheader("Visual Analysis")
 
     fig, axs = plt.subplots(2, 2, figsize=(16, 11))
