@@ -29,9 +29,9 @@ This project analyzes **10+ years of historical, real-time stock market data**, 
 ---
 
 ## 📂 Project Structure
-├── app.py  
-├── requirements.txt  
-└── README.md
+├── README.md  
+├── app.py   
+└── requirements.txt
 
 ---
 
