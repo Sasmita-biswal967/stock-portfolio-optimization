@@ -4,243 +4,232 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from scipy.signal import argrelextrema
+
 from pypfopt import EfficientFrontier, risk_models, expected_returns, plotting
 from pypfopt.discrete_allocation import DiscreteAllocation, get_latest_prices
+
 from xgboost import XGBRegressor
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+# PAGE CONFIG
 st.set_page_config(layout="wide")
-st.title("Stock Price Prediction & Portfolio Optimization")
-MODE = st.sidebar.selectbox("Select Mode", ["Breakout Strategy", "Portfolio Optimization", "Intraday Prediction"])
+plt.style.use("seaborn-v0_8-darkgrid")
 
-if MODE == "Breakout Strategy":
-    st.header("Breakout Strategy with Support/Resistance")
-    stocks = st.text_input("Enter Ticker Symbols (comma separated):")
-    stock_list = [s.strip().upper() for s in stocks.split(",") if s.strip()]
-    n = 10
-    for symbol in stock_list:
-        st.subheader(f"{symbol}")
+st.title("Smart Stock Portfolio Optimization System")
+st.markdown("""
+**Machine Learning + Modern Portfolio Theory**
+- Uses last **10 years + real-time data**
+- Predicts returns using **XGBoost**
+- Optimizes portfolio using **Efficient Frontier**
+""")
+st.divider()
 
-        print(f"\nProcessing {symbol}...")
-        df = yf.download(symbol, period='1y', interval='1d', auto_adjust=True)
+# INPUT SECTION
+st.header("Portfolio Inputs")
 
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+col1, col2 = st.columns(2)
+
+with col1:
+    tickers_input = st.text_input(
+        "Stock Tickers (comma separated)",
+        placeholder="TCS.NS, INFY.NS, RELIANCE.NS"
+    )
+
+with col2:
+    capital = st.number_input(
+        "Total Capital (₹)",
+        min_value=1000.0,
+        value=100000.0,
+        step=1000.0
+    )
+
+# FETCH DATA
+if tickers_input and capital:
+
+    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=365 * 10)
+
+    with st.spinner("Downloading 10 years of stock data..."):
+        adj_close_df = pd.DataFrame()
+
+        for ticker in tickers:
+            data = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                progress=False
+            )
+            if not data.empty:
+                adj_close_df[ticker] = data["Close"]
+
+    if adj_close_df.empty or len(adj_close_df) < 100:
+        st.error("Not enough data. Try different stocks.")
+        st.stop()
+
+    adj_close_df.ffill(inplace=True)
+    adj_close_df.bfill(inplace=True)
+
+    # UTILITY FUNCTIONS 
+    def calculate_rsi(series, period=14):
+        delta = series.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(period).mean()
+        avg_loss = loss.rolling(period).mean()
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    def prepare_features(df, ticker):
+        df = df[[ticker]].copy()
+        df["LogReturn"] = np.log(df[ticker] / df[ticker].shift(1))
+        df["Lag1"] = df["LogReturn"].shift(1)
+        df["Lag5"] = df["LogReturn"].shift(5)
+        df["MA5"] = df[ticker].rolling(5).mean()
+        df["MA10"] = df[ticker].rolling(10).mean()
+        df["Vol10"] = df["LogReturn"].rolling(10).std()
+        df["RSI"] = calculate_rsi(df[ticker])
         df.dropna(inplace=True)
 
-        df['resistance'] = df.iloc[argrelextrema(df['High'].values, np.greater_equal, order=n)[0]]['High']
-        df['support'] = df.iloc[argrelextrema(df['Low'].values, np.less_equal, order=n)[0]]['Low']
+        X = df[["Lag1", "Lag5", "MA5", "MA10", "Vol10", "RSI"]]
+        y = df["LogReturn"]
+        return X, y
 
-        df['resistance'] = df['resistance'].ffill()
-        df['support'] = df['support'].ffill()
+    # ML PREDICTION
+    st.subheader("Machine Learning Return Prediction (XGBoost)")
 
-        def breakout_strategy(row):
-            if row[('Close', symbol)] > row[('resistance', '')]:
-                return 1
-            elif row[('Close', symbol)] < row[('support', '')]:
-                return -1
-            else:
-                return 0
-        df[('signal', '')] = df.apply(breakout_strategy, axis=1)
+    predicted_returns = {}
+    valid_tickers = []
+    metrics = []
 
-        fig, ax = plt.subplots(figsize=(12, 4))
-        ax.set_title('Support/Resistance Breakout Strategy')
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Price')
-        ax.plot(df.index, df[('Close', symbol)], label='Close', linewidth=1.5)
-        ax.plot(df['resistance'], label='Resistance', linestyle='--', color='red', alpha=0.5)
-        ax.plot(df['support'], label='Support', linestyle='--', color='green', alpha=0.5)
-        ax.scatter(df.index[df[('signal', '')] == 1], df[('Close', symbol)][df[('signal', '')] == 1],
-                marker='^', color='green', label='Buy', alpha=0.8)
-        ax.scatter(df.index[df[('signal', '')] == -1], df[('Close', symbol)][df[('signal', '')] == -1],
-                marker='v', color='red', label='Sell', alpha=0.8)
-        
-        ax.legend()
-        ax.grid(True)
-        fig.tight_layout()
-        st.pyplot(fig)
+    for ticker in tickers:
+        try:
+            X, y = prepare_features(adj_close_df, ticker)
 
-elif MODE == "Portfolio Optimization":
-    st.header("Portfolio Optimization with Efficient Frontier")
-    # Input Section
-    tickers_input = st.text_input("Enter comma-separated stock tickers (e.g., TCS.NS, INFY.NS):")
-    capital = st.number_input("Enter total capital to invest :",min_value=100.0, value=10000.0)
-    
-    if tickers_input and capital:
-        tickers = [ticker.strip().upper() for ticker in tickers_input.split(",") if ticker.strip()]
-        
-        st.info("Fetching stock data...")
-        adj_close_df = pd.DataFrame()
-        for ticker in tickers:
-            data = yf.download(ticker, start="2020-01-01", end="2025-06-30", auto_adjust=True)
-            if not data.empty and 'Close' in data.columns:
-                adj_close_df[ticker] = data['Close']
-    
-        if adj_close_df.empty or adj_close_df.shape[0] < 30:
-            st.error("Not enough historical data for analysis. Please try different tickers.")
-            st.stop()
-    
-        adj_close_df.ffill(inplace=True)
-        adj_close_df.bfill(inplace=True)
-    
-        # Utility Functions
-        def calculate_rsi(data, periods=14):
-            delta = data.diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(window=periods).mean()
-            avg_loss = loss.rolling(window=periods).mean()
-            rs = avg_gain / avg_loss
-            return 100 - (100 / (1 + rs))
-    
-        def prepare_features(df, ticker):
-            df = df[[ticker]].copy()
-            df['LogReturn'] = np.log(df[ticker] / df[ticker].shift(1))
-            df['Lag1'] = df['LogReturn'].shift(1)
-            df['Lag5'] = df['LogReturn'].shift(5)
-            df['MA5'] = df[ticker].rolling(window=5).mean()
-            df['MA10'] = df[ticker].rolling(window=10).mean()
-            df['Vol10'] = df['LogReturn'].rolling(window=10).std()
-            df['RSI'] = calculate_rsi(df[ticker])
-            df = df.dropna()
-            X = df[['Lag1', 'Lag5', 'MA5', 'MA10', 'Vol10', 'RSI']]
-            y = df['LogReturn']
-            return X, y
-    
-        predicted_returns = {}
-        valid_tickers = []
-        
-        st.subheader("XGBoost Model Performance")
-        st.write(f"{'Ticker':<15} {'MAE':<10} {'RMSE':<10} {'R² Score':<10}")
-        st.write("-" * 45)
-    
-        for ticker in tickers:
-            try:
-                X, y = prepare_features(adj_close_df, ticker)
-                if len(X) < 30:
-                    st.warning(f"Not enough data to train ML model for {ticker}. Skipping.")
-                    continue
-    
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    
-                param_grid = {
-                    'n_estimators': [50, 100],
-                    'learning_rate': [0.05, 0.1],
-                    'max_depth': [3, 5],
-                    'reg_alpha': [0, 0.1],
-                    'reg_lambda': [1]
-                }
-                xgb = XGBRegressor(random_state=42)
-                grid_search = GridSearchCV(xgb, param_grid, cv=3, scoring='neg_mean_squared_error', n_jobs=-1)
-                grid_search.fit(X_train, y_train)
-                best_xgb = grid_search.best_estimator_
-    
-                y_pred = best_xgb.predict(X_test)
-                mae = mean_absolute_error(y_test, y_pred)
-                rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-                r2 = r2_score(y_test, y_pred)
-                st.write(f"{ticker:<15} {mae:.6f} {rmse:.6f} {r2:.6f}")
-    
-                latest_features = X.iloc[-1:].values
-                predicted_daily_return = best_xgb.predict(latest_features)[0]
-                predicted_annual_return = predicted_daily_return * 252
-                predicted_returns[ticker] = predicted_annual_return
-                valid_tickers.append(ticker)
-            except Exception as e:
-                st.warning(f"Error with {ticker}: {e}")
-    
-        if not valid_tickers:
-            st.error("No valid stocks with sufficient data for ML prediction.")
-            st.stop()
-    
-        # Portfolio Optimization
-        st.subheader("Portfolio Optimization (Efficient Frontier)")
-        mu = expected_returns.mean_historical_return(adj_close_df[valid_tickers]) * 252
-        S = risk_models.CovarianceShrinkage(adj_close_df[valid_tickers]).ledoit_wolf() * 252
-        ef = EfficientFrontier(mu, S, weight_bounds=(0, 1))
-        ef.max_sharpe(risk_free_rate=0.06)
-        optimal_weights = ef.clean_weights()
-        weights_dict = {ticker: weight for ticker, weight in optimal_weights.items()}
-    
-        st.write("**Optimal Weights:**")
-        st.json(weights_dict)
-    
-        port_return, port_volatility, sharpe = ef.portfolio_performance(risk_free_rate=0.06)
-        st.write(f"**Expected Annual Return:** {port_return:.2%}")
-        st.write(f"**Expected Volatility:** {port_volatility:.2%}")
-        st.write(f"**Sharpe Ratio:** {sharpe:.2f}")
-    
-        # Discrete Allocation
-        st.subheader("Discrete Allocation")
-        latest_prices = get_latest_prices(adj_close_df[valid_tickers])
-        da = DiscreteAllocation(weights_dict, latest_prices, total_portfolio_value=capital)
-        allocation, leftover = da.greedy_portfolio()
-    
-        alloc_df = pd.DataFrame([
-            {"Ticker": k, "Shares": v, "Price per Share": latest_prices[k], "Total Value": v * latest_prices[k]}
-            for k, v in allocation.items()
-        ])
-        st.dataframe(alloc_df)
-        st.write(f"**Total Invested Amount:** {alloc_df['Total Value'].sum():,.2f}")
-        st.write(f"**Remaining Capital:** {leftover:.2f}")
-    
-        # Visualization
-        st.subheader("Visualizations")
-        fig, axs = plt.subplots(2, 2, figsize=(15, 10))
-    
-        # Pie Chart
-        axs[0, 0].pie([weights_dict[t] for t in valid_tickers], labels=valid_tickers, autopct='%1.1f%%', startangle=140)
-        axs[0, 0].set_title("Optimal Portfolio Allocation")
-    
-        # Efficient Frontier
-        ef_plot = EfficientFrontier(mu, S, weight_bounds=(0, 1))
-        plotting.plot_efficient_frontier(ef_plot, ax=axs[0, 1], show_assets=False)
-        for ticker in valid_tickers:
-            axs[0, 1].scatter(np.sqrt(S.loc[ticker, ticker]), mu[ticker], s=50, label=ticker)
-        axs[0, 1].scatter(port_volatility, port_return, marker='*', color='r', s=200, label='Optimal Portfolio')
-        axs[0, 1].set_title('Efficient Frontier')
-        axs[0, 1].legend()
-    
-        # Historical Performance
-        log_returns = np.log(adj_close_df[valid_tickers] / adj_close_df[valid_tickers].shift(1)).dropna()
-        portfolio_value = (log_returns.mul([weights_dict[t] for t in valid_tickers], axis=1)
-                           .sum(axis=1)).cumsum().apply(np.exp)
-        axs[1, 0].plot(portfolio_value.index, portfolio_value, label="Optimized Portfolio")
-        axs[1, 0].set_title("Historical Portfolio Performance")
-        axs[1, 0].grid(True)
-        axs[1, 0].legend()
-    
-        axs[1, 1].axis('off')  # empty
-    
-        st.pyplot(fig)
+            if len(X) < 50:
+                continue
 
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, shuffle=False
+            )
 
-elif MODE == "Intraday Prediction":
-    st.header("Intraday Prediction with Random Forest")
-    ticker = st.text_input("Enter Ticker:","HAL.NS")
-    df = yf.download(ticker, period='10d', interval='30m', auto_adjust=True)[['Open', 'High', 'Low', 'Close', 'Volume']]
-    df.dropna(inplace=True)
-    df['Target'] = df['Close'].shift(-1)
-    df.dropna(inplace=True)
+            param_grid = {
+                "n_estimators": [50, 100],
+                "learning_rate": [0.05, 0.1],
+                "max_depth": [3, 5]
+            }
 
-    X = df[['Open', 'High', 'Low', 'Volume']]
-    y = df['Target']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=0.2)
+            model = XGBRegressor(random_state=42)
+            grid = GridSearchCV(
+                model,
+                param_grid,
+                cv=3,
+                scoring="neg_mean_squared_error",
+                n_jobs=-1
+            )
+            grid.fit(X_train, y_train)
+            best_model = grid.best_estimator_
 
-    model = RandomForestRegressor(n_estimators=100)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+            y_pred = best_model.predict(X_test)
 
-    st.write("### R² Score:", r2_score(y_test, y_pred))
-    st.write("### MSE:", mean_squared_error(y_test, y_pred))
+            mae = mean_absolute_error(y_test, y_pred)
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            r2 = r2_score(y_test, y_pred)
 
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(y_test.values, label='Actual', color='blue')
-    ax.plot(y_pred, label='Predicted', color='red')
-    ax.set_title(f"Intraday Price Prediction for {ticker}")
-    ax.legend()
-    ax.grid(True)
+            metrics.append({
+                "Ticker": ticker,
+                "MAE": round(mae, 6),
+                "RMSE": round(rmse, 6),
+                "R² Score": round(r2, 4)
+            })
+
+            latest_return = best_model.predict(X.iloc[-1:].values)[0]
+            predicted_returns[ticker] = latest_return * 252
+            valid_tickers.append(ticker)
+
+        except Exception as e:
+            st.warning(f"{ticker} skipped")
+
+    if not valid_tickers:
+        st.error("No valid stocks for ML prediction.")
+        st.stop()
+
+    st.dataframe(pd.DataFrame(metrics), use_container_width=True)
+
+    # PORTFOLIO OPTIMIZATION 
+    st.subheader("Portfolio Optimization (Efficient Frontier)")
+
+    mu = expected_returns.mean_historical_return(adj_close_df[valid_tickers])
+    S = risk_models.CovarianceShrinkage(
+        adj_close_df[valid_tickers]
+    ).ledoit_wolf()
+
+    ef = EfficientFrontier(mu, S)
+    ef.max_sharpe(risk_free_rate=0.06)
+    weights = ef.clean_weights()
+
+    st.write("**Optimal Portfolio Weights**")
+    st.json(weights)
+
+    ret, vol, sharpe = ef.portfolio_performance(risk_free_rate=0.06)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Expected Return", f"{ret:.2%}")
+    col2.metric("Volatility", f"{vol:.2%}")
+    col3.metric("Sharpe Ratio", f"{sharpe:.2f}")
+
+    # DISCRETE ALLOCATION 
+    st.subheader("Capital Allocation")
+
+    latest_prices = get_latest_prices(adj_close_df[valid_tickers])
+    da = DiscreteAllocation(weights, latest_prices, capital)
+    allocation, leftover = da.greedy_portfolio()
+
+    alloc_df = pd.DataFrame([
+        {
+            "Ticker": k,
+            "Shares": v,
+            "Price": latest_prices[k],
+            "Total Value": v * latest_prices[k]
+        }
+        for k, v in allocation.items()
+    ])
+
+    st.dataframe(alloc_df, use_container_width=True)
+    st.write(f"**Remaining Cash:** ₹{leftover:,.2f}")
+
+    # ================= VISUALIZATION =================
+    st.subheader("Visual Analysis")
+
+    fig, axs = plt.subplots(2, 2, figsize=(16, 11))
+
+    # Pie Chart
+    axs[0, 0].pie(
+        [weights[t] for t in valid_tickers],
+        labels=valid_tickers,
+        autopct="%1.1f%%"
+    )
+    axs[0, 0].set_title("Portfolio Allocation")
+
+    # Efficient Frontier
+    plotting.plot_efficient_frontier(ef, ax=axs[0, 1], show_assets=False)
+    axs[0, 1].set_title("Efficient Frontier")
+
+    # Portfolio Performance
+    log_returns = np.log(adj_close_df[valid_tickers] /
+                         adj_close_df[valid_tickers].shift(1)).dropna()
+
+    portfolio_value = (log_returns.mul(
+        [weights[t] for t in valid_tickers], axis=1
+    ).sum(axis=1)).cumsum().apply(np.exp)
+
+    axs[1, 0].plot(portfolio_value)
+    axs[1, 0].set_title("Historical Portfolio Growth")
+
+    axs[1, 1].axis("off")
+
     st.pyplot(fig)
-        
+
